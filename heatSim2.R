@@ -15,18 +15,18 @@ cppFunction(
   }"
 )
 
-generateNNextTemps<-function(t0,p,td,vhc,simT,dx,dt,len,m){
-    t<-array(data=0,dim=c(len,m)) #make array
+generateNNextTemps<-function(t0,p,td,vhc,dx,dt,nt,nx){
+    t<-array(data=0,dim=c(nt,nx)) #make array
     t[1,]<-t0 #start condition
     t[,1]<-t0[1] #border condition
-    t[,m]<-t0[m] #border condition
+    t[,nx]<-t0[nx] #border condition
     
     if(max(td*dt/(dx^2)>.5)){
       warning(paste(" Je-li hodnota alpha*dt/(dx^2) vetsi nez 0.5, pak FTCS bude nestabilni. Ted je",max(td*dt/(dx^2))))
     }
     
-    for(i in 1:(len-1)){#loop over time
-        for(j in 2:(m-1)){#loop over space
+    for(i in 1:(nt-1)){#loop over time
+        for(j in 2:(nx-1)){#loop over space
             t[i+1,j]<-calcTemp(t[i,j-1],t[i,j],t[i,j+1],
                 p[i,j],
                 td[j],
@@ -37,14 +37,14 @@ generateNNextTemps<-function(t0,p,td,vhc,simT,dx,dt,len,m){
     t
 }
 
-generateNNextTempsBTCS<-function(t0,p,td,vhc,simT,dx,dt,len,m){
-    t<-array(data=0,dim=c(len,m)) #make array
+generateNNextTempsBTCS<-function(t0,p,td,vhc,dx,dt,nt,nx){
+    t<-array(data=0,dim=c(nt,nx)) #make array
     t[1,]<-t0 #start condition
-    t[,1]<-t0[1] #border condition
-    t[,m]<-t0[m] #border condition
+    #t[,1]<-t0[1] #border condition
+    #t[,nx]<-t0[nx] #border condition
 
-    A<-matrix(0,nrow = m,ncol = m)
-    B<-matrix(0,nrow = m,ncol = 1)
+    A<-matrix(0,nrow = nx,ncol = nx)
+    B<-matrix(0,nrow = nx,ncol = 1)
     
     for(i in 2:(nrow(A)-1)){
         A[i,i-1]<- -td[i]/(dx*dx)
@@ -57,65 +57,83 @@ generateNNextTempsBTCS<-function(t0,p,td,vhc,simT,dx,dt,len,m){
     A[nrow(A),nrow(A)-1]<-0
     A[nrow(A),nrow(A)]<-1
 
-    for(i in 2:len){#loop over time
-        B<-1/dt* t[i-1,]+p[i-1]*dt/vhc[i-1]
+    for(i in 2:nt){#loop over time
+        B<-1/dt* t[i-1,]+p[i-1,]/vhc
         B[1]<-t0[1]#
-        B[m]<-t0[m]#
-        t[i,]<-solve(a=A,b=B)
+        B[nx]<-t0[nx]#
+        t[i,]<-solve(A,B)
+        
+        t[i,1]<-t0[1]#
+        t[i,nx]<-t0[nx]
     }
     t
 }
 
 
+dt<-0.0001
+dx<-0.1
 
-# i_cyklus<-matrix(data=c(1000*c(11,0,11,0,12,0,12,0,9.2,0),
-#                         0.001*c(900,2080,920,4080,900,1100,900,3100,500,28000)),ncol=2)
-i_cyklus<-matrix(data=c(c(11),
-                        c(100)),ncol=2)
-# i_cyklus<-matrix(data=c(c(0),
-#                         c(900)),ncol=2)
+tmax<-1
+l<-2
 
-l<-3 #celkova delka v mm
-dx<-.1 #vzdalenost mezi elementarnimi bunkami v mm
-m<-ceiling(l/dx) #pocet bunek
+nt<-round(tmax/dt)
+nx<-round(l/dx)
 
-simT<-sum(i_cyklus[,2]) #doba simulace v s
-dt<-1 #dt (časový element simulace v s)
-len<-ceiling(simT/dt) #pocet casovych useku
+t0<-c(rep(40,nx)) #vector of initial temperatures
+# t0<-sin(rep(seq(from=0,to=pi,length=nx)))
 
+td<-rep(8.8,nx)#vector of thermal diffusities (alpha; mm^2/s), si: 88
+vhc<-c(rep(1.72E-3,nx))#volumetric heat capacity (specific heat capacity * density) (J/(mm^3*K)) Si: Michal:1,641E6, Ilja 1,72E6...
 
-t0<-c(rep(40,m)) #vector of initial temperatures
-td<-rep(88,m)#vector of thermal diffusities (alpha; mm^2/s), si: 88
-vhc<-c(rep(1.72E-3,m))#volumetric heat capacity (specific heat capacity * density) (J/(mm^3*K)) Si: Michal:1,641E6, Ilja 1,72E6...
+cyklus<-matrix(data=c(1000*c(11,0,11,0,12,0,12,0,9.2,0),#vykon v elementu tloustky dx
+                      c(900,2080,920,4080,900,1100,900,3100,500,28000)),#pomerny cas proudu
+               ncol=2)
 
-print(max(td*dt/(dx^2)))
+active<-matrix(data=c(c(0,1,0),#pomer vykonu
+                      c(10,1,10)),#pomerny rozmer
+               ncol=2)
 
-u<-2 #ubytek (V)
-tloustkaPN<-.05 #tloustka pn prechodu v mm
-objemPN<-0.05*3000 #objem pn prechodu v mm^3
-k<-tloustkaPN/dx #koeficient, kterym se nasobi objemovy vykon, 
-# aby celkova energie mohla byt prirazena jedne elementarni jednotce (?)
-  
-p_cyklus<-k * i_cyklus[,1]*(u/objemPN) #vykon na mm^3, zde proud*napeti/objem PN prechodu
+genPCyklus<-function(nt,nx,dx,cyklus,active){
+    #prepare array of volumetric power densities (time x space)(q, J/(s*mm^3))
+    
+    k<-sum(cyklus[,2])
+    tk<-ceiling(cyklus[,2]/k*nt)
+    
+    k2<-sum(active[,2])
+    tk2<-ceiling(active[,2]/k2*nx)
+    
+    p2<-matrix(data=0,nrow=1,ncol=sum(tk))
+    p2<-rep(cyklus[,1],tk)[1:nt]
 
-p<-array(data=0,dim=c(len,m))#volumetric power densities (q, J/(s*mm^3))
-
-#naplneni vektoru p
-a<-c()
-for(i in 1:length(i_cyklus[,2])){
-  a<-c(a,rep(p_cyklus[i],i_cyklus[i,2]/(1000*dt)))
+    p3<-matrix(data=0,nrow=1,ncol=sum(tk2))
+    p3<-rep(active[,1],tk2)[1:nx]
+    
+    p4<-matrix(data=p2,nrow=nt,ncol=nx)
+    p5<-matrix(data=p3,nrow=nt,ncol=nx,byrow = T)
+    
+    p<-p4*p5
 }
-p[,round(m/2)]<-a
+
+p<-genPCyklus(nt,nx,dx,cyklus,active)
+
 
 Rprof(tmp <- tempfile())
-tArr<-generateNNextTempsBTCS(t0,p,td,vhc,simT,dx,dt,len,m)
+
+tArr<-generateNNextTemps(t0, p,td,vhc,dx,dt,nt,nx)
+tArr2<-generateNNextTempsBTCS(t0, p,td,vhc,dx,dt,nt,nx)
+
 Rprof()
 summaryRprof(tmp)
 
-plot(tArr[,round(m/2)],type="l")
-lines(tArr[,round(m/4)])
-lines(tArr[,round(m/10)])
-lines(tArr[,2])
+plot(tArr[,round(nx/2)],type="l")
+lines(tArr2[,round(nx/2)],col="red")
+
+lines(tArr[,round(nx/4)])
+lines(tArr2[,round(nx/4)],col="red")
+
+lines(tArr[,round(nx/10)])
+lines(tArr2[,round(nx/10)],col="red")
+
 max(tArr)
 
 tArr[1:200,16:24]
@@ -126,34 +144,34 @@ lines(tArr[900,])
 lines(tArr[3000,])
 lines(tArr[5000,])
 
-persp((tArr[seq(1,len,length.out = 100),]))
+persp((tArr[seq(1,nt,length.out = 100),]))
 library(plotly)
-plot_ly(z=~tArr[seq(1,len,length.out = 100),]) %>% add_surface()
+plot_ly(z=~tArr[seq(1,nt,length.out = 100),]) %>% add_surface()
 
 
 #-----
 #http://www.nada.kth.se/~jjalap/numme/FDheat.pdf
-m<-200
-len<-1000
-L<-1
-dx<-L/m
-dt<-0.05
-simT<-len*dt
-td<-rep(0.1,m)#vector of thermal diffusities (alpha; mm^2/s), si: 88
-vhc<-c(rep(1.72E-3,m))#volumetric heat capacity (specific heat capacity * density) (J/(mm^3*K)) Si: Michal:1,641E6, Ilja 1,72E6...
-p<-array(data=0,dim=c(len,m))#volumetric power densities (q, J/(s*mm^3))
-t0<-sin(seq(from=0,to=pi,length=m))
-
-Rprof(tmp <- tempfile())
-tArr<-generateNNextTempsBTCS(t0,p,td,vhc,simT,dx,dt,len,m)
-Rprof()
-summaryRprof(tmp)
-
-Rprof(tmp <- tempfile())
-tArr2<-generateNNextTemps(t0,p,td,vhc,simT,dx,dt,len,m)
-Rprof()
-summaryRprof(tmp)
-
-plot(tArr[20,],type="l")
-lines(tArr2[20,],col="red")
+# nx<-200
+# nt<-1000
+# L<-1
+# dx<-L/nx
+# dt<-0.05
+# 
+# td<-rep(0.1,nx)#vector of thermal diffusities (alpha; mm^2/s), si: 88
+# vhc<-c(rep(1.72E-3,nx))#volumetric heat capacity (specific heat capacity * density) (J/(mm^3*K)) Si: Michal:1,641E6, Ilja 1,72E6...
+# p<-array(data=0,dim=c(nt,nx))#volumetric power densities (q, J/(s*mm^3))
+# t0<-sin(seq(from=0,to=pi,length=nx))
+# 
+# Rprof(tmp <- tempfile())
+# tArr<-generateNNextTempsBTCS(t0,p,td,vhc,dx,dt,nt,nx)
+# Rprof()
+# summaryRprof(tmp)
+# 
+# Rprof(tmp <- tempfile())
+# tArr2<-generateNNextTemps(t0,p,td,vhc,dx,dt,nt,nx)
+# Rprof()
+# summaryRprof(tmp)
+# 
+# plot(tArr[20,],type="l")
+# lines(tArr2[20,],col="red")
 
