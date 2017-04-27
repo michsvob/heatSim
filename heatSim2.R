@@ -37,6 +37,15 @@ generateNNextTemps<-function(t0,p,td,vhc,dx,dt,nt,nx){
     t
 }
 
+getVoltage<-function(current,temperature){
+    v0RT<-0.843;rdRT<-0.026;v0HT<-0.672;rdHT<-0.029
+    t<-c(25, 150)
+    v<-c(v0RT+rdRT*current,v0HT+rdHT*current)
+    f<-approxfun(t,v,rule=2)#interpolace napeti dle teploty. 
+    #hodnoty mimo interval se priradi extremum v intervalu (aby napeti uplne neulitavalo)
+    f(temperature)
+}
+
 generateNNextTempsBTCS<-function(t0,p,td,vhc,dx,dt,nt,nx){
     t<-array(data=0,dim=c(nt,nx)) #make array
     t[1,]<-t0 #start condition
@@ -58,6 +67,7 @@ generateNNextTempsBTCS<-function(t0,p,td,vhc,dx,dt,nt,nx){
     A[nrow(A),nrow(A)]<-1
 
     for(i in 2:nt){#loop over time
+        
         B<-1/dt* t[i-1,]+p[i-1,]/vhc
         B[1]<-t0[1]#
         B[nx]<-t0[nx]#
@@ -65,36 +75,17 @@ generateNNextTempsBTCS<-function(t0,p,td,vhc,dx,dt,nt,nx){
         
         t[i,1]<-t0[1]#
         t[i,nx]<-t0[nx]
+        
+        p[i]<-p[i]*mapply(getVoltage,current=p[i],temperature=t[i])
     }
     t
 }
 
-
-dt<-0.0001
-dx<-0.1
-
-tmax<-1
-l<-2
-
-nt<-round(tmax/dt)
-nx<-round(l/dx)
-
-t0<-c(rep(40,nx)) #vector of initial temperatures
-# t0<-sin(rep(seq(from=0,to=pi,length=nx)))
-
-td<-rep(8.8,nx)#vector of thermal diffusities (alpha; mm^2/s), si: 88
-vhc<-c(rep(1.72E-3,nx))#volumetric heat capacity (specific heat capacity * density) (J/(mm^3*K)) Si: Michal:1,641E6, Ilja 1,72E6...
-
-cyklus<-matrix(data=c(1000*c(11,0,11,0,12,0,12,0,9.2,0),#vykon v elementu tloustky dx
-                      c(900,2080,920,4080,900,1100,900,3100,500,28000)),#pomerny cas proudu
-               ncol=2)
-
-active<-matrix(data=c(c(0,1,0),#pomer vykonu
-                      c(10,1,10)),#pomerny rozmer
-               ncol=2)
-
 genPCyklus<-function(nt,nx,dx,cyklus,active){
     #prepare array of volumetric power densities (time x space)(q, J/(s*mm^3))
+    #given is - how many time and space elements there should be
+    #         - values in time and space segments
+    #         - proportions of time and space
     
     k<-sum(cyklus[,2])
     tk<-ceiling(cyklus[,2]/k*nt)
@@ -104,7 +95,7 @@ genPCyklus<-function(nt,nx,dx,cyklus,active){
     
     p2<-matrix(data=0,nrow=1,ncol=sum(tk))
     p2<-rep(cyklus[,1],tk)[1:nt]
-
+    
     p3<-matrix(data=0,nrow=1,ncol=sum(tk2))
     p3<-rep(active[,1],tk2)[1:nx]
     
@@ -114,39 +105,75 @@ genPCyklus<-function(nt,nx,dx,cyklus,active){
     p<-p4*p5
 }
 
+genTD<-function(nx,td_setting){
+    k<-sum(td_setting[,2])
+    tk<-ceiling(td_setting[,2]/k*nx)
+    td<-matrix(data=0,nrow=1,ncol=sum(tk))
+    td<-rep(td_setting[,1],tk)[1:nx]
+}
+
+#funkce, ktera danemu proudu a teplote priradi napeti
+
+
+dt<-0.001
+dx<-0.01
+
+tmax<-.1
+l<-4
+
+nt<-round(tmax/dt)
+nx<-round(l/dx)
+
+t0<-c(rep(20,nx)) #vector of initial temperatures
+# t0<-sin(rep(seq(from=0,to=pi,length=nx)))
+
+
+vhc<-c(rep(1.72E-3,nx))#volumetric heat capacity (specific heat capacity * density) (J/(mm^3*K)) Si: Michal:1,641E6, Ilja 1,72E6...
+#vhc je potreba jen u vrstev, kde se generuje teplo (v heat eq. je nasobena nulou)
+
+cyklus<-matrix(data=c(1000*c(11,0,11,0,12,0,12,0,9.2,0),#vykon v elementu tloustky dx
+                      c(900,2080,920,4080,900,1100,900,3100,500,28000)),#pomerny cas 
+               ncol=2)
+
+
+
+active<-matrix(data=c(c(0,  0, 1, 0, 0,  0)/1548,#pomer proudu deleny plochou Si
+                      c(15,3.4,0.25,2,3.4,15)),#pomerny rozmer
+               ncol=2)
+td_setting<-matrix(data=c(c(111,111,88  ,54.3,111,111),#thermal diffusivity in segment (alpha; mm^2/s), si: 88
+                          c(15 ,3.4,0.25,2   ,3.4,15)),#pomerny rozmer
+                   ncol=2)
+
+plocha_setting<-matrix(data=c(c(2026,2026,1548,2026,2026,2026)/1548,#plocha segmentu relativne k Si
+                            c(15 ,3.4,0.25,2  ,3.4,15)),#pomerny rozmer
+                   ncol=2)
+
+plocha<-genTD(nx,plocha_setting)   
+td<-genTD(nx,td_setting)
+td_adjusted<-td*plocha
+
+
 p<-genPCyklus(nt,nx,dx,cyklus,active)
 
 
 Rprof(tmp <- tempfile())
 
-tArr<-generateNNextTemps(t0, p,td,vhc,dx,dt,nt,nx)
-tArr2<-generateNNextTempsBTCS(t0, p,td,vhc,dx,dt,nt,nx)
+#tArr<-generateNNextTemps(t0, p,td,vhc,dx,dt,nt,nx)
+tArr2<-generateNNextTempsBTCS(t0, p,td_adjusted,vhc,dx,dt,nt,nx)
 
 Rprof()
 summaryRprof(tmp)
 
-plot(tArr[,round(nx/2)],type="l")
-lines(tArr2[,round(nx/2)],col="red")
-
-lines(tArr[,round(nx/4)])
+plot(tArr2[,round(nx/2)],col="red",type="l")
 lines(tArr2[,round(nx/4)],col="red")
-
-lines(tArr[,round(nx/10)])
 lines(tArr2[,round(nx/10)],col="red")
 
-max(tArr)
+max(tArr2)
 
-tArr[1:200,16:24]
 
-plot(tArr[1,],type="l")
-lines(tArr[900,])
-
-lines(tArr[3000,])
-lines(tArr[5000,])
-
-persp((tArr[seq(1,nt,length.out = 100),]))
+persp((tArr2[seq(1,nt,length.out = 100),]))
 library(plotly)
-plot_ly(z=~tArr[seq(1,nt,length.out = 100),]) %>% add_surface()
+plot_ly(z=~tArr2[seq(1,nt,length.out = 100),]) %>% add_surface()
 
 
 #-----
